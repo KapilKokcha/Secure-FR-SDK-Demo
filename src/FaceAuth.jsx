@@ -1,59 +1,68 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
+import {
+  Button,
+  TextField,
+  Tooltip,
+  Alert,
+  AlertTitle,
+  CircularProgress,
+  Typography,
+  Box,
+} from '@mui/material';
+import {
+  User as UserIcon,
+  KeyRound as KeyRoundIcon,
+  CheckCircle,
+  XCircle,
+  Info as InfoIcon,
+} from 'lucide-react';
+import { motion } from 'framer-motion';
 
-const Button = ({ children, onClick, disabled, className }) => (
-  <button onClick={onClick} disabled={disabled} className={className}>
-    {children}
-  </button>
-);
-
-const Alert = ({ variant, className, children }) => <div className={`${className} ${variant === 'destructive' ? 'bg-red-100 text-red-800' : ''}`}>{children}</div>;
-const AlertTitle = ({ children }) => <h2 className="font-bold">{children}</h2>;
-const AlertDescription = ({ children }) => <p>{children}</p>;
-
-const cn = (...classes) => classes.filter(Boolean).join(' ');
+// Replace with your actual CDN URLs
+const SDK_URL = '/sdk/face-sdk.umd.js';
 
 const loadSDK = () => {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = '/sdk/face-sdk.umd.js';
+    script.src = SDK_URL;
     script.onload = () => {
       resolve(window.FaceSDK);
     };
-    // console.log(window.FaceSDK);
     script.onerror = () => {
-        console.error("Failed to load FaceSDK");
-        resolve(null);
-    }
+      console.error('Failed to load FaceSDK');
+      reject(new Error('Failed to load FaceSDK'));
+    };
     document.body.appendChild(script);
   });
 };
 
 const FaceAuth = () => {
   const videoRef = useRef(null);
+  const identifierInputRef = useRef(null);
+  const encryptedFaceInputRef = useRef(null);
+
   const [faceSDK, setFaceSDK] = useState(null);
   const [registrationResult, setRegistrationResult] = useState(null);
   const [verificationResult, setVerificationResult] = useState(null);
   const [encryptedFaceData, setEncryptedFaceData] = useState(null);
-  const identifiersRef = useRef(['user123', 'email@example.com']);
+  const [identifiers, setIdentifiers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [registrationStage, setRegistrationStage] = useState('idle');
+  const [verificationStage, setVerificationStage] = useState('idle');
 
   useEffect(() => {
     const init = async () => {
       setLoading(true);
       try {
         const sdk = await loadSDK();
-        console.log("sdk = ",sdk );
         setFaceSDK(sdk);
-        if (sdk) {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-            if (videoRef.current) {
-              videoRef.current.srcObject = stream;
-              console.log(videoRef.current.srcObject);
-            }
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : "An unexpected error occurred");
+        setError(err.message || 'An unexpected error occurred');
       } finally {
         setLoading(false);
       }
@@ -61,144 +70,210 @@ const FaceAuth = () => {
     init();
 
     return () => {
-      if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject;
-        const tracks = stream.getTracks();
-        tracks.forEach(track => track.stop());
-        videoRef.current.srcObject = null;
+      if (videoRef.current?.srcObject) {
+        videoRef.current.srcObject.getTracks().forEach((track) => track.stop());
       }
     };
   }, []);
 
-  const handleRegister = async () => {
+  const handleRegister = useCallback(async () => {
     if (!faceSDK || !videoRef.current) {
-      setError('SDK not loaded or video stream not available.');
+      setError('SDK not loaded or video not available.');
       return;
     }
-    setError(null);
+    if (identifiers.length === 0) {
+      setError('Please provide at least one identifier.');
+      return;
+    }
+
     setLoading(true);
-    setRegistrationResult(null);
-    setVerificationResult(null);
+    setError(null);
+    setRegistrationStage('registering');
+
     try {
-      const result = await faceSDK.FaceSDK.registerFace(identifiersRef.current, videoRef.current);
-      console.log(result);
+      const result = await faceSDK.FaceSDK.registerFace(identifiers, videoRef.current);
       setRegistrationResult(JSON.stringify(result, null, 2));
       setEncryptedFaceData(result.encryptedFace);
-      alert('Face registered successfully!');
+      alert('Face registered successfully! Save your encrypted face data.');
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Registration failed";
-      setError(message);
+      setError(err.message || 'Registration failed');
     } finally {
+      setRegistrationStage('idle');
       setLoading(false);
     }
-  };
+  }, [faceSDK, identifiers]);
 
-  const handleVerify = async () => {
+  const handleVerify = useCallback(async () => {
     if (!faceSDK || !videoRef.current || !encryptedFaceData) {
-      setError('SDK not loaded, video stream not available, or no registration data.');
+      setError('SDK not loaded or missing encrypted face data.');
       return;
     }
-    setError(null);
+    if (identifiers.length === 0) {
+      setError('Please provide identifiers used during registration.');
+      return;
+    }
+
     setLoading(true);
-    setVerificationResult(null);
+    setError(null);
+    setVerificationStage('verifying');
+
     try {
-      const isMatch = await faceSDK.FaceSDK.verifyFace(encryptedFaceData, identifiersRef.current, videoRef.current);
-      console.log(isMatch);
-      setVerificationResult(isMatch ? 'Face verified!' : 'Face not matched.');
-      alert(isMatch ? 'Face verified!' : 'Face not matched.');
+      const isMatch = await faceSDK.FaceSDK.verifyFace(encryptedFaceData, identifiers, videoRef.current);
+      setVerificationResult(isMatch ? 'Face verified! You are awesome!' : 'Face not matched. Please try again.');
     } catch (err) {
-        const message = err instanceof Error ? err.message : "Verification failed";
-      setError(message);
+      setError(err.message || 'Verification failed');
     } finally {
+      setVerificationStage('idle');
       setLoading(false);
     }
+  }, [faceSDK, encryptedFaceData, identifiers]);
+
+  const handleIdentifierInputChange = (e) => {
+    const value = e.target.value.trim();
+    setIdentifiers(value.split(',').map((s) => s.trim()).filter(Boolean));
+  };
+
+  const startRegistration = () => {
+    setRegistrationStage('input');
+    setVerificationStage('idle');
+    setError(null);
+    setIdentifiers([]);
+    setEncryptedFaceData(null);
+    setRegistrationResult(null);
+    setVerificationResult(null);
+    identifierInputRef.current?.focus();
+  };
+
+  const startVerification = () => {
+    setVerificationStage('input');
+    setRegistrationStage('idle');
+    setError(null);
+    setIdentifiers([]);
+    setEncryptedFaceData(null);
+    setRegistrationResult(null);
+    setVerificationResult(null);
+    identifierInputRef.current?.focus();
+  };
+
+  const getVerificationResultIcon = () => {
+    if (verificationResult === 'Face verified! You are awesome!') return <CheckCircle color="green" size={20} />;
+    if (verificationResult === 'Face not matched. Please try again.') return <XCircle color="red" size={20} />;
+    return null;
   };
 
   return (
-    <div className="flex flex-col items-center justify-start min-h-screen bg-gray-100 p-4">
-      <h2 className="text-2xl font-bold mb-4">Face Authentication</h2>
+    <Box p={4} maxWidth={600} mx="auto">
+      <Typography variant="h4" align="center" gutterBottom>
+        Face Authentication
+      </Typography>
 
-      <div className="relative w-full max-w-md">
-          <video
-            ref={videoRef}
-            width="100%"
-            height="auto"
-            autoPlay
-            muted
-            className="rounded-lg border border-gray-300 shadow-md"
-          />
+      <Box position="relative" mb={2}>
+        <video ref={videoRef} autoPlay muted style={{ width: '100%', borderRadius: 8 }} />
         {loading && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 rounded-lg">
-                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-            </div>
+          <Box position="absolute" top={0} left={0} right={0} bottom={0} display="flex" alignItems="center" justifyContent="center" bgcolor="rgba(0,0,0,0.5)">
+            <CircularProgress />
+          </Box>
         )}
-      </div>
+      </Box>
 
-      <div className="mt-4 space-x-4">
+      <Box display="flex" gap={2} mb={2}>
         <Button
-          onClick={handleRegister}
+          variant="contained"
+          color="primary"
+          onClick={startRegistration}
           disabled={loading}
-          className={cn(
-            "bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded",
-            loading && "opacity-50 cursor-not-allowed"
-          )}
+          startIcon={<UserIcon size={18} />}
         >
           Register Face
         </Button>
-        {encryptedFaceData && (
+        <Button
+          variant="contained"
+          color="success"
+          onClick={startVerification}
+          disabled={loading}
+          startIcon={<KeyRoundIcon size={18} />}
+        >
+          Verify Face
+        </Button>
+      </Box>
+
+      {(registrationStage === 'input' || verificationStage === 'input') && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+          <Box mb={2}>
+            <Tooltip
+              title="Enter one or more identifiers (comma-separated). This must match during verification."
+              placement="top"
+            >
+              <TextField
+                label="Identifiers"
+                placeholder="e.g., username, email@example.com"
+                fullWidth
+                onChange={handleIdentifierInputChange}
+                inputRef={identifierInputRef}
+              />
+            </Tooltip>
+          </Box>
+
+          {verificationStage === 'input' && (
+            <Box mb={2}>
+              <TextField
+                label="Encrypted Face Data"
+                placeholder="Paste the encrypted data"
+                fullWidth
+                onChange={(e) => setEncryptedFaceData(e.target.value)}
+                inputRef={encryptedFaceInputRef}
+              />
+            </Box>
+          )}
+
           <Button
-            onClick={handleVerify}
+            fullWidth
+            variant="contained"
+            color={registrationStage === 'input' ? 'primary' : 'success'}
+            onClick={registrationStage === 'input' ? handleRegister : handleVerify}
             disabled={loading}
-            className={cn(
-              "bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded",
-              loading && "opacity-50 cursor-not-allowed"
-            )}
           >
-            Verify Face
+            {loading ? (
+              <CircularProgress size={24} />
+            ) : registrationStage === 'input' ? 'Confirm Registration' : 'Confirm Verification'}
           </Button>
-        )}
-      </div>
+        </motion.div>
+      )}
 
       {registrationResult && (
-        <div className="mt-4 w-full max-w-md">
-          <h3 className="text-lg font-semibold mb-2">Registration Result:</h3>
-          <pre className="bg-gray-800 text-white p-4 rounded-md overflow-auto max-h-48">
-            {registrationResult}
-          </pre>
-        </div>
+        <Box mt={3}>
+          <Typography variant="h6">Registration Result</Typography>
+          <pre>{registrationResult}</pre>
+          {encryptedFaceData && (
+            <Alert severity="info" sx={{ mt: 2 }}>
+              <AlertTitle>Save your Encrypted Face Data</AlertTitle>
+              <Box sx={{ wordBreak: 'break-word' }}>{encryptedFaceData}</Box>
+            </Alert>
+          )}
+        </Box>
       )}
 
       {verificationResult && (
-        <div className="mt-4 w-full max-w-md">
-          <h3 className="text-lg font-semibold mb-2">Verification Result:</h3>
-          <p className={cn(
-            "p-3 rounded-md text-center",
-            verificationResult === 'Face verified!' ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
-          )}>
+        <Box mt={3}>
+          <Typography variant="h6" display="flex" alignItems="center" gap={1}>
+            {getVerificationResultIcon()} Verification Result
+          </Typography>
+          <Alert severity={verificationResult.includes('verified') ? 'success' : 'error'}>
             {verificationResult}
-          </p>
-        </div>
+          </Alert>
+        </Box>
       )}
 
       {error && (
-        <Alert variant="destructive" className="mt-4 w-full max-w-md">
-          <AlertTitle>Error</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
+        <Box mt={2}>
+          <Alert severity="error">
+            <AlertTitle>Error</AlertTitle>
+            {error}
+          </Alert>
+        </Box>
       )}
-    </div>
+    </Box>
   );
 };
 
-function App() {
-  return (
-    <div className="App">
-      <FaceAuth />
-    </div>
-  );
-}
-
-export default App;
+export default FaceAuth;
