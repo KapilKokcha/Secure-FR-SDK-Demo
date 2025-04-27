@@ -176,7 +176,7 @@ const FaceAuth = () => {
 
       setRegistrationResult();
 
-      setTimeout(function() {
+      setTimeout(function () {
         setNotificationMessage();
       }, 5000);
 
@@ -204,7 +204,18 @@ const FaceAuth = () => {
       </Typography>
 
       <Box position="relative" mb={2}>
-        <video ref={videoRef} autoPlay muted style={{ width: '100%', borderRadius: 8 }} />
+        <video
+          ref={videoRef}
+          autoPlay
+          muted
+          style={{
+            width: '100%',
+            borderRadius: 8,
+            transform: 'scaleX(-1)', // Flip the video horizontally
+            filter: 'brightness(1.1) contrast(1.2) saturate(1.5)', // Beautify the video
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)', // Box shadow
+          }}
+        />
         {loading && (
           <Box position="absolute" top={0} left={0} right={0} bottom={0} display="flex" alignItems="center" justifyContent="center" bgcolor="rgba(0,0,0,0.5)">
             <CircularProgress />
@@ -212,6 +223,7 @@ const FaceAuth = () => {
         )}
       </Box>
 
+      {/* Use Grid or Box with Flex to divide the space equally */}
       <Box display="flex" gap={2} mb={2}>
         <Button
           variant="contained"
@@ -219,6 +231,7 @@ const FaceAuth = () => {
           onClick={startRegistration}
           disabled={loading}
           startIcon={<UserIcon size={18} />}
+          sx={{ flex: 1 }} // Makes the button take half of the space
         >
           Register Face
         </Button>
@@ -228,6 +241,7 @@ const FaceAuth = () => {
           onClick={startVerification}
           disabled={loading}
           startIcon={<KeyRoundIcon size={18} />}
+          sx={{ flex: 1 }} // Makes the button take half of the space
         >
           Verify Face
         </Button>
@@ -254,7 +268,7 @@ const FaceAuth = () => {
                 label="Identifiers"
                 placeholder="e.g., username, email@example.com"
                 fullWidth
-                value={identifiersInput} // Bind to the single input string state
+                value={identifiersInput}
                 onChange={handleIdentifierInputChange}
                 inputRef={identifierInputRef}
               />
@@ -376,6 +390,7 @@ const FaceAuth = () => {
         </Box>
       )}
     </Box>
+
   );
 };
 
