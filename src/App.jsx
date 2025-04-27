@@ -6,7 +6,7 @@ function App() {
   return (
     <div className="App">
       <header className="App-header">
-        <h1>Face Authentication Demo</h1>
+        <h1>Secure FR-SDK Demo</h1>
         <FaceAuth />
       </header>
     </div>
