@@ -45,11 +45,20 @@ const FaceAuth = () => {
   const [registrationResult, setRegistrationResult] = useState(null);
   const [verificationResult, setVerificationResult] = useState(null);
   const [encryptedFaceData, setEncryptedFaceData] = useState(null);
-  const [identifiers, setIdentifiers] = useState([]);
+  const [identifiersInput, setIdentifiersInput] = useState(''); // Changed to a single input string
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [registrationStage, setRegistrationStage] = useState('idle');
   const [verificationStage, setVerificationStage] = useState('idle');
+  const [copied, setCopied] = useState(false);
+
+  const [justRegistered, setJustRegistered] = useState(false);
+  const [notificationMessage, setNotificationMessage] = useState('');
+  const [preFilledIdentifiers, setPreFilledIdentifiers] = useState([]);
+  const [preFilledEncryptedFaceData, setPreFilledEncryptedFaceData] = useState(null);
+
+  // Derive the identifiers array from the input string
+  const identifiers = identifiersInput.split(',').map((s) => s.trim()).filter(Boolean);
 
   useEffect(() => {
     const init = async () => {
@@ -76,13 +85,21 @@ const FaceAuth = () => {
     };
   }, []);
 
+  const handleCopy = () => {
+    navigator.clipboard.writeText(encryptedFaceData).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
   const handleRegister = useCallback(async () => {
     if (!faceSDK || !videoRef.current) {
       setError('SDK not loaded or video not available.');
       return;
     }
-    if (identifiers.length === 0) {
-      setError('Please provide at least one identifier.');
+
+    if (identifiers.length < 2) {
+      setError('Please provide at least 2 identifiers.');
       return;
     }
 
@@ -94,6 +111,9 @@ const FaceAuth = () => {
       const result = await faceSDK.FaceSDK.registerFace(identifiers, videoRef.current);
       setRegistrationResult(JSON.stringify(result, null, 2));
       setEncryptedFaceData(result.encryptedFace);
+      setPreFilledIdentifiers(identifiers); // Store identifiers
+      setPreFilledEncryptedFaceData(result.encryptedFace); // Store encrypted face data
+      setJustRegistered(true);
       alert('Face registered successfully! Save your encrypted face data.');
     } catch (err) {
       setError(err.message || 'Registration failed');
@@ -129,15 +149,14 @@ const FaceAuth = () => {
   }, [faceSDK, encryptedFaceData, identifiers]);
 
   const handleIdentifierInputChange = (e) => {
-    const value = e.target.value.trim();
-    setIdentifiers(value.split(',').map((s) => s.trim()).filter(Boolean));
+    setIdentifiersInput(e.target.value);
   };
 
   const startRegistration = () => {
     setRegistrationStage('input');
     setVerificationStage('idle');
     setError(null);
-    setIdentifiers([]);
+    setIdentifiersInput(''); // Clear the input field
     setEncryptedFaceData(null);
     setRegistrationResult(null);
     setVerificationResult(null);
@@ -148,10 +167,27 @@ const FaceAuth = () => {
     setVerificationStage('input');
     setRegistrationStage('idle');
     setError(null);
-    setIdentifiers([]);
-    setEncryptedFaceData(null);
-    setRegistrationResult(null);
-    setVerificationResult(null);
+
+    if (justRegistered) {
+      // Pre-fill identifiers and encrypted face data after registration
+      setIdentifiersInput(preFilledIdentifiers.join(', '));
+      setEncryptedFaceData(preFilledEncryptedFaceData);
+      setNotificationMessage("We've pre-filled your details from the recent registration.");
+
+      setRegistrationResult();
+
+      setTimeout(function() {
+        setNotificationMessage();
+      }, 5000);
+
+    } else {
+      // Clear values if not just registered
+      setIdentifiersInput('');
+      setEncryptedFaceData(null);
+      setVerificationResult(null);
+    }
+
+    setJustRegistered(false); // Reset the justRegistered flag after pre-filling
     identifierInputRef.current?.focus();
   };
 
@@ -197,17 +233,28 @@ const FaceAuth = () => {
         </Button>
       </Box>
 
+      {notificationMessage && (
+        <Alert
+          severity="info"
+          sx={{ mb: 2 }}
+          onClose={() => setNotificationMessage('')}
+        >
+          {notificationMessage}
+        </Alert>
+      )}
+
       {(registrationStage === 'input' || verificationStage === 'input') && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
           <Box mb={2}>
             <Tooltip
-              title="Enter one or more identifiers (comma-separated). This must match during verification."
+              title="Enter two or more identifiers (comma-separated). IMP : This must match during verification."
               placement="top"
             >
               <TextField
                 label="Identifiers"
                 placeholder="e.g., username, email@example.com"
                 fullWidth
+                value={identifiersInput} // Bind to the single input string state
                 onChange={handleIdentifierInputChange}
                 inputRef={identifierInputRef}
               />
@@ -220,6 +267,7 @@ const FaceAuth = () => {
                 label="Encrypted Face Data"
                 placeholder="Paste the encrypted data"
                 fullWidth
+                value={encryptedFaceData || ''}
                 onChange={(e) => setEncryptedFaceData(e.target.value)}
                 inputRef={encryptedFaceInputRef}
               />
@@ -242,12 +290,67 @@ const FaceAuth = () => {
 
       {registrationResult && (
         <Box mt={3}>
-          <Typography variant="h6">Registration Result</Typography>
-          <pre>{registrationResult}</pre>
+          <Typography variant="h6" gutterBottom>Registration Result</Typography>
+
+          {(() => {
+            try {
+              const parsed = JSON.parse(registrationResult);
+              const { createdAt, modelVersion } = parsed.metadata || {};
+              return (
+                <Box
+                  sx={{
+                    mt: 2,
+                    p: 2,
+                    bgcolor: '#f9f9f9',
+                    border: '1px solid #ddd',
+                    borderRadius: 1,
+                  }}
+                >
+                  <Typography variant="subtitle1" gutterBottom>
+                    Metadata
+                  </Typography>
+                  <Typography variant="body2"><strong>Created At:</strong> {createdAt || 'N/A'}</Typography>
+                  <Typography variant="body2"><strong>Model Version:</strong> {modelVersion || 'N/A'}</Typography>
+                </Box>
+              );
+            } catch {
+              return null;
+            }
+          })()}
+
           {encryptedFaceData && (
-            <Alert severity="info" sx={{ mt: 2 }}>
-              <AlertTitle>Save your Encrypted Face Data</AlertTitle>
-              <Box sx={{ wordBreak: 'break-word' }}>{encryptedFaceData}</Box>
+            <Alert
+              severity="info"
+              sx={{
+                mt: 2,
+                '& .MuiAlert-icon': { display: 'none' },
+              }}
+            >
+              <AlertTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Tooltip title="Save your Encrypted Face Data, along with identifiers – they will be required during login.">
+                  <InfoIcon size={18} style={{ cursor: 'pointer' }} />
+                </Tooltip>
+                Save your Encrypted Face Data
+              </AlertTitle>
+              <Box sx={{ wordBreak: 'break-word' }}>
+                <Typography variant="body2" sx={{ mb: 1 }}>
+                  {encryptedFaceData}
+                </Typography>
+                <Box display="flex" justifyContent="flex-end" alignItems="center" gap={1}>
+                  {copied && (
+                    <Typography variant="caption" color="success.main">
+                      Copied!
+                    </Typography>
+                  )}
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={handleCopy}
+                  >
+                    Copy
+                  </Button>
+                </Box>
+              </Box>
             </Alert>
           )}
         </Box>
