@@ -91,3 +91,17 @@ This demo app illustrates the following:
 * The encrypted face data is sensitive and should be stored securely in a real-world application.
 * The application uses a mirrored video feed for a more intuitive user experience.
 * The application is designed to be a demonstration and may require further development for production use.
+
+## Getting Started (After Pulling or Cloning)
+
+To run the project locally, follow these steps:
+
+1. **Clone the repository (if not already done):**
+   ```bash
+   git clone https://github.com/KapilKokcha/Secure-FR-SDK-Demo.git
+   cd Secure-FR-SDK-Demo
+   ```
+2. Install dependencies:
+``` npm install```
+3. Start the development server:
+```npm run dev```
