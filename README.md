@@ -105,3 +105,7 @@ To run the project locally, follow these steps:
 ``` npm install```
 3. Start the development server:
 ```npm run dev```
+
+## Testing with face-landmarks
+
+To test with face landmarks checkout the branch face-landmarks.
