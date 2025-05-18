@@ -20,28 +20,6 @@ import { motion } from 'framer-motion';
 
 const SDK_URL = '/sdk/face-sdk.umd.js';
 
-// const loadSDK = () => {
-//   return new Promise((resolve, reject) => {
-//     const script = document.createElement('script');
-//     script.src = SDK_URL;
-//     script.onload = () => {
-//       if (window.FaceSDK && window.FaceSDK.isReady) {
-//         resolve(window.FaceSDK);
-//       } else if (window.FaceSDK && typeof window.FaceSDK.onReady === 'function') {
-//         window.FaceSDK.onReady(() => resolve(window.FaceSDK));
-//       } else {
-//         console.warn("FaceSDK loaded, but no explicit 'isReady' or 'onReady' found. Proceeding with caution.");
-//         resolve(window.FaceSDK);
-//       }
-//     };
-//     script.onerror = () => {
-//       console.error('Failed to load FaceSDK');
-//       reject(new Error('Failed to load FaceSDK'));
-//     };
-//     document.body.appendChild(script);
-//   });
-// };
-
 const loadSDK = () => {
   return new Promise(async (resolve, reject) => {
     const script = document.createElement('script');
@@ -49,10 +27,6 @@ const loadSDK = () => {
     script.onload = async () => {
       if (window.FaceSDK) {
         try {
-          // Ensure models are loaded before resolving the SDK
-          console.log(window.FaceSDK);
-          // await window.FaceSDK.FaceSDK.FaceCaptureService.loadModels();
-          // await window.FaceSDK.FaceSDK.FaceLandmarkService.loadModelsIfNeeded();
           await window.FaceSDK.FaceSDK.loadModels();
           console.log("Face SDK and models loaded successfully.");
           resolve(window.FaceSDK);
@@ -77,6 +51,7 @@ const FaceAuth = () => {
   const canvasRef = useRef(null);
   const identifierInputRef = useRef(null);
   const encryptedFaceInputRef = useRef(null);
+  const animationFrameId = useRef(null);
 
   const [faceSDK, setFaceSDK] = useState(null);
   const [registrationResult, setRegistrationResult] = useState(null);
@@ -88,47 +63,101 @@ const FaceAuth = () => {
   const [registrationStage, setRegistrationStage] = useState('idle');
   const [verificationStage, setVerificationStage] = useState('idle');
   const [copied, setCopied] = useState(false);
-
   const [justRegistered, setJustRegistered] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState('');
   const [preFilledIdentifiers, setPreFilledIdentifiers] = useState([]);
   const [preFilledEncryptedFaceData, setPreFilledEncryptedFaceData] = useState(null);
-  const [landmarks, setLandmarks] = useState(null);
 
   const identifiers = identifiersInput.split(',').map((s) => s.trim()).filter(Boolean);
 
+  const drawLandmarks = useCallback((ctx, points, videoWidth) => {
+    if (!points || !ctx) return;
+
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.fillStyle = 'yellow';
+    ctx.strokeStyle = 'yellow';
+    ctx.lineWidth = 2;
+
+    points.forEach(point => {
+      ctx.beginPath();
+      ctx.arc(videoWidth - point.x, point.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    const connections = window.FaceSDK?.FaceSDK.FACE_CONNECTIONS || [];
+    connections.forEach(([start, end]) => {
+      ctx.beginPath();
+      ctx.moveTo(videoWidth - points[start].x, points[start].y);
+      ctx.lineTo(videoWidth - points[end].x, points[end].y);
+      ctx.stroke();
+    });
+  }, []);
+
+  const startDetectionLoop = useCallback(async (sdk) => {
+    if (!videoRef.current || !canvasRef.current) return;
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+
+    const detectFrame = async () => {
+      try {
+        if (video.readyState >= 2) {
+          const videoWidth = video.videoWidth;
+          const videoHeight = video.videoHeight;
+
+          if (canvas.width !== videoWidth || canvas.height !== videoHeight) {
+            canvas.width = videoWidth;
+            canvas.height = videoHeight;
+          }
+
+          const landmarks = await sdk.FaceSDK.detectLandmarks(video);
+          drawLandmarks(ctx, landmarks, videoWidth);
+        }
+      } catch (error) {
+        console.error('Landmark detection error:', error);
+      }
+      animationFrameId.current = requestAnimationFrame(detectFrame);
+    };
+
+    animationFrameId.current = requestAnimationFrame(detectFrame);
+  }, [drawLandmarks]);
+
   useEffect(() => {
-    const init = async () => {
+    const initialize = async () => {
       setLoading(true);
       try {
-        const sdk = await loadSDK();
+        const [sdk, stream] = await Promise.all([
+          loadSDK(),
+          navigator.mediaDevices.getUserMedia({
+            video: { width: 640, height: 480, facingMode: 'user' }
+          })
+        ]);
+
         setFaceSDK(sdk);
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
+        videoRef.current.srcObject = stream;
+
+        await new Promise((resolve) => {
+          videoRef.current.onloadedmetadata = resolve;
+        });
+
+        startDetectionLoop(sdk);
       } catch (err) {
-        setError(err.message || 'An unexpected error occurred');
+        setError(err.message);
       } finally {
         setLoading(false);
       }
     };
 
-    init();
+    initialize();
 
     return () => {
+      cancelAnimationFrame(animationFrameId.current);
       if (videoRef.current?.srcObject) {
-        videoRef.current.srcObject.getTracks().forEach((track) => track.stop());
+        videoRef.current.srcObject.getTracks().forEach(track => track.stop());
       }
     };
-  }, []);
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(encryptedFaceData).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
+  }, [startDetectionLoop]);
 
   const handleRegister = useCallback(async () => {
     if (!faceSDK || !videoRef.current) {
@@ -152,11 +181,12 @@ const FaceAuth = () => {
       setPreFilledIdentifiers(identifiers);
       setPreFilledEncryptedFaceData(result.encryptedFace);
       setJustRegistered(true);
-      alert('Face registered successfully! Save your encrypted face data.');
+      setNotificationMessage('Face registered successfully! Save your encrypted face data.');
+      setTimeout(() => setNotificationMessage(''), 5000);
     } catch (err) {
       if (err.message === "No face detected") {
+        setError("Please ensure your face is clearly visible in the frame with adequate lighting.");
         setRegistrationStage('input');
-        setError(err.message);
         return;
       }
       setError(err.message || 'Registration failed');
@@ -186,7 +216,7 @@ const FaceAuth = () => {
       setVerificationResult(isMatch ? 'Face verified! You are awesome!' : 'Face not matched. Please try again.');
     } catch (err) {
       if (err.message === "No face detected") {
-        setError(err.message);
+        setError("Please ensure your face is clearly visible in the frame with adequate lighting.");
         setVerificationStage('input');
         return;
       }
@@ -197,86 +227,12 @@ const FaceAuth = () => {
     }
   }, [faceSDK, encryptedFaceData, identifiers]);
 
-  // const drawLandmarks = useCallback((ctx, points) => {
-  //   console.log("yay");
-  //   if (!points || points.length === 0) return;
-
-  //   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-  //   ctx.fillStyle = 'yellow';
-  //   ctx.strokeStyle = 'yellow';
-  //   ctx.lineWidth = 2;
-
-  //   points.forEach((point) => {
-  //     ctx.beginPath();
-  //     ctx.arc(point.x, point.y, 3, 0, 2 * Math.PI);
-  //     ctx.fill();
-  //   });
-
-  //   for (let i = 0; i < points.length - 1; i++) {
-  //     ctx.beginPath();
-  //     ctx.moveTo(points[i].x, points[i].y);
-  //     ctx.lineTo(points[i + 1].x, points[i + 1].y);
-  //     ctx.stroke();
-  //   }
-  //    console.log("yay");
-  // }, []);
-
-  const drawLandmarks = useCallback((ctx, points) => {
-    if (!points || points.length === 0) return;
-
-    const videoWidth = videoRef.current ? videoRef.current.videoWidth : 0;
-    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    ctx.fillStyle = 'yellow';
-    ctx.strokeStyle = 'yellow';
-    ctx.lineWidth = 2;
-
-    points.forEach((point) => {
-      // Flip the x-coordinate for drawing
-      const flippedX = videoWidth - point.x;
-      ctx.beginPath();
-      ctx.arc(flippedX, point.y, 3, 0, 2 * Math.PI);
-      ctx.fill();
+  const handleCopy = () => {
+    navigator.clipboard.writeText(encryptedFaceData).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     });
-    for (let i = 0; i < points.length - 1; i++) {
-      // Flip the x-coordinates for drawing lines
-      const flippedX1 = videoWidth - points[i].x;
-      const flippedX2 = videoWidth - points[i + 1].x;
-      ctx.beginPath();
-      ctx.moveTo(flippedX1, points[i].y);
-      ctx.lineTo(flippedX2, points[i + 1].y);
-      ctx.stroke();
-    }
-  }, []);
-
-  useEffect(() => {
-    const draw = async () => {
-      if (faceSDK && faceSDK.FaceSDK && videoRef.current && canvasRef.current && videoRef.current.readyState >= 2) {
-        const videoElement = videoRef.current;
-        const canvasElement = canvasRef.current;
-        canvasElement.width = videoElement.videoWidth;
-        canvasElement.height = videoElement.videoHeight;
-
-        const ctx = canvasElement.getContext('2d');
-        if (ctx) {
-          try {
-            const currentLandmarks = await faceSDK.FaceSDK.detectLandmarks(videoRef.current);
-            setLandmarks(currentLandmarks);
-            console.log("Landmarks:", currentLandmarks);
-            drawLandmarks(ctx, currentLandmarks);
-          } catch (error) {
-            console.error("Error detecting landmarks:", error);
-          }
-        } else {
-          console.error("Canvas context not available in draw loop.");
-        }
-      }
-      requestAnimationFrame(draw);
-    };
-
-    if (faceSDK && faceSDK.FaceSDK) {
-      draw();
-    }
-  }, [drawLandmarks, faceSDK]);
+  };
 
   const handleIdentifierInputChange = (e) => {
     setIdentifiersInput(e.target.value);
@@ -289,7 +245,6 @@ const FaceAuth = () => {
     setIdentifiersInput('');
     setEncryptedFaceData(null);
     setRegistrationResult(null);
-    setLandmarks(null);
     setVerificationResult(null);
     identifierInputRef.current?.focus();
   };
@@ -298,45 +253,26 @@ const FaceAuth = () => {
     setVerificationStage('input');
     setRegistrationStage('idle');
     setError(null);
+    setRegistrationResult(null); // Clear registration result
+    setVerificationResult(null);
 
     if (justRegistered) {
       setIdentifiersInput(preFilledIdentifiers.join(', '));
       setEncryptedFaceData(preFilledEncryptedFaceData);
       setNotificationMessage("We've pre-filled your details from the recent registration.");
-      setLandmarks(null);
-      setRegistrationResult();
-
-      setTimeout(function () {
-        setNotificationMessage();
-      }, 5000);
+      setTimeout(() => setNotificationMessage(''), 5000);
     } else {
       setIdentifiersInput('');
       setEncryptedFaceData(null);
       setVerificationResult(null);
-      setLandmarks(null);
     }
 
     setJustRegistered(false);
     identifierInputRef.current?.focus();
   };
-
-  useEffect(() => {
-    const draw = async () => {
-      if (faceSDK && videoRef.current && canvasRef.current) {
-        const ctx = canvasRef.current.getContext('2d');
-        const currentLandmarks = await faceSDK.FaceSDK.detectLandmarks(videoRef.current);
-        console.log("Landmarks:", currentLandmarks);
-        setLandmarks(currentLandmarks);
-        drawLandmarks(ctx, currentLandmarks);
-      }
-      requestAnimationFrame(draw);
-    };
-    draw();
-  }, [drawLandmarks, faceSDK]);
-
   const getVerificationResultIcon = () => {
-    if (verificationResult === 'Face verified! You are awesome!') return <CheckCircle color="green" size={20} />;
-    if (verificationResult === 'Face not matched. Please try again.') return <XCircle color="red" size={20} />;
+    if (verificationResult?.includes('verified')) return <CheckCircle color="green" size={20} />;
+    if (verificationResult?.includes('not matched')) return <XCircle color="red" size={20} />;
     return null;
   };
 
@@ -351,15 +287,14 @@ const FaceAuth = () => {
           ref={videoRef}
           autoPlay
           muted
+          playsInline
           style={{
             width: '100%',
             borderRadius: 8,
             transform: 'scaleX(-1)',
-            filter: 'brightness(1.1) contrast(1.2) saturate(1.5)',
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+            backgroundColor: '#000',
           }}
         />
-
         <canvas
           ref={canvasRef}
           style={{
@@ -368,7 +303,6 @@ const FaceAuth = () => {
             left: 0,
             width: '100%',
             height: '100%',
-            borderRadius: 8,
             pointerEvents: 'none',
           }}
         />
@@ -423,7 +357,7 @@ const FaceAuth = () => {
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
           <Box mb={2}>
             <Tooltip
-              title="Enter two or more identifiers (comma-separated). IMP : This must match during verification."
+              title="Enter two or more identifiers (comma-separated). Must match during verification."
               placement="top"
             >
               <TextField
@@ -464,33 +398,25 @@ const FaceAuth = () => {
         </motion.div>
       )}
 
-      {registrationResult && (
+      {registrationResult && verificationStage === 'idle' && (
         <Box mt={3}>
           <Typography variant="h6" gutterBottom>Registration Result</Typography>
-
-          {(() => {
-            try {
-              const parsed = JSON.parse(registrationResult);
-              const { createdAt, modelVersion } = parsed.metadata || {};
-              return (
-                <Box
-                  sx={{
-                    mt: 2,
-                    p: 2,
-                    bgcolor: '#f9f9f9',
-                    border: '1px solid #ddd',
-                    borderRadius: 1,
-                  }}
-                >
-                  <Typography variant="subtitle1" gutterBottom>Metadata</Typography>
-                  <Typography variant="body2"><strong>Created At:</strong> {createdAt || 'N/A'}</Typography>
-                  <Typography variant="body2"><strong>Model Version:</strong> {modelVersion || 'N/A'}</Typography>
-                </Box>
-              );
-            } catch {
-              return null;
-            }
-          })()}
+          <Box
+            sx={{
+              mt: 2,
+              p: 2,
+              bgcolor: '#f9f9f9',
+              border: '1px solid #ddd',
+              borderRadius: 1,
+              overflow: 'auto', // Add scrollbar if content overflows
+              maxHeight: 200, // Optional: set a maximum height
+              wordBreak: 'break-word', // Prevent long words from breaking layout
+            }}
+          >
+            <Typography variant="body2" component="pre">
+              {registrationResult}
+            </Typography>
+          </Box>
 
           {encryptedFaceData && (
             <Alert
@@ -501,7 +427,7 @@ const FaceAuth = () => {
               }}
             >
               <AlertTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Tooltip title="Save your Encrypted Face Data, along with identifiers – they will be required during login.">
+                <Tooltip title="Save your Encrypted Face Data along with identifiers">
                   <InfoIcon size={18} style={{ cursor: 'pointer' }} />
                 </Tooltip>
                 Save your Encrypted Face Data
@@ -526,7 +452,7 @@ const FaceAuth = () => {
         </Box>
       )}
 
-      {verificationResult && (
+      {verificationResult && verificationStage === 'idle' && (
         <Box mt={3}>
           <Typography variant="h6" display="flex" alignItems="center" gap={1}>
             {getVerificationResultIcon()} Verification Result
